@@ -55,6 +55,13 @@ sam.eval();
 predictor = SamPredictor(sam)
 tt.toc();
 
+def send_ok(con:socket):
+    con.sendall("OK\n".encode())
+
+def send_err(con:socket, msg: str):
+    con.sendall(f"ERROR: {msg}\n".encode())
+
+
 #SERVER
 print(f"Starting server...")
 with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as s:
@@ -82,48 +89,50 @@ with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as s:
                         if jstr:
                             print(">"+jstr)
                             cmd = json.loads(jstr)
-                            if(cmd["name"]=="predict"):
+                            # set a new image
+                            if(cmd["name"]=="set_img"):
                                 imgsz = cmd["size"]
                                 buf = bytearray(imgsz)
-                                boxes =  np.array(cmd["box"]) if "box" in cmd else None
-                                points = np.array(cmd["point"]) if "point" in cmd else None
-                                labels = np.array(cmd["label"]) if "label" in cmd else None
-                                multimask = cmd["multimask"] if "multimask" in cmd else False
-                                con.sendall("OK\n".encode())
+                                # send OK, start receiving
+                                send_ok(con);
                                 byte_reads = con.recv_into(buf,imgsz)
                                 if(byte_reads == imgsz):
                                     #decode image
                                     img = cv2.imdecode(np.frombuffer(buf,dtype=np.uint8), cv2.IMREAD_COLOR)
-                                    #set image
+                                    # set image
                                     tt.tic(f"Inferencing ({device})");
                                     predictor.set_image(img);
                                     tt.toc();
-
-                                    masks, scores, logits = predictor.predict(
-                                        point_coords=points,
-                                        point_labels=labels,
-                                        box = boxes,
-                                        multimask_output=multimask,
-                                    )
-
-                                    id = scores.tolist().index(max(scores))
-                                    mask = masks[id].astype(np.uint8)*255;
-                                    maskbuf = cv2.imencode(".png",mask)[1].tobytes()
-                                    con.sendall(f'{{"mask":{id},"score":{scores[id]},"size":{len(maskbuf)}}}\n'.encode())
-                                    con.sendall(maskbuf)
-                                    #img[mask] = (0,255,0)
-                                    #for p in points:
-                                    #    cv2.circle(img,p,5,(255,0,255),-1)
-                                    #cv2.imshow("img",img)
-                                    #cv2.waitKey(1)
-                                    con.sendall("OK\n".encode())
+                                    #send OK
+                                    send_ok(con);
                                 else:
                                    raise Exception(f"Corrupted data when processing {jstr}"); 
+
+                            # predict on current image
+                            elif(cmd["name"]=="predict"):
+                                boxes =  np.array(cmd["box"]) if "box" in cmd else None
+                                points = np.array(cmd["point"]) if "point" in cmd else None
+                                labels = np.array(cmd["label"]) if "label" in cmd else None
+                                multimask = cmd["multimask"] if "multimask" in cmd else False
+                                #send OK
+                                send_ok(con);
+                                masks, scores, logits = predictor.predict(
+                                    point_coords=points,
+                                    point_labels=labels,
+                                    box = boxes,
+                                    multimask_output=multimask,
+                                )
+                                id = scores.tolist().index(max(scores))
+                                mask = masks[id].astype(np.uint8)*255;
+                                maskbuf = cv2.imencode(".png",mask)[1].tobytes()
+                                con.sendall(f'{{"mask":{id},"score":{scores[id]},"size":{len(maskbuf)}}}\n'.encode())
+                                con.sendall(maskbuf)
+                                send_ok(con);
                             else:
                                 print(f"Unknown command {jstr}")
                     except Exception as ex:
                         print("ERROR: " + str(ex))
-                        con.sendall(("ERROR: "+str(ex)+"\n").encode())
+                        send_err(con,str(ex))
                     time.sleep(0.010); #100 hz polling
         except Exception as ex: 
             print("Opps! "+str(ex))
